@@ -10,8 +10,7 @@ import Cocoa
 class CustomTabbarView: NSView {
     private var tabs: [TabItem] = []
     private var tabViews: [CustomTabView] = []
-    private let scrollView = NSScrollView()
-    private let contentView = NSView()
+    private let tabStackView = NSStackView()
     private let plusButton = NSButton()
     
     private var draggedTabIndex: Int?
@@ -33,16 +32,12 @@ class CustomTabbarView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         
-        // 滚动视图设置
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(scrollView)
-        
-        // 内容视图
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.documentView = contentView
+        // 配置StackView
+        tabStackView.orientation = .horizontal
+        tabStackView.distribution = .fillEqually
+        tabStackView.spacing = 4
+        tabStackView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tabStackView)
         
         // Plus按钮
         plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
@@ -56,16 +51,24 @@ class CustomTabbarView: NSView {
         
         // 约束
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scrollView.trailingAnchor.constraint(equalTo: plusButton.leadingAnchor, constant: -8),
-            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            tabStackView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            tabStackView.trailingAnchor.constraint(equalTo: plusButton.leadingAnchor, constant: -8),
+            tabStackView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            tabStackView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
             
             plusButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             plusButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             plusButton.widthAnchor.constraint(equalToConstant: 24),
             plusButton.heightAnchor.constraint(equalToConstant: 24)
         ])
+    }
+    
+    // NSStackView自动处理布局，移除这些方法
+    // override func viewDidEndLiveResize() 和 resizeSubviews 不再需要
+    
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        // NSStackView会自动处理布局，不需要手动调用layoutTabs
     }
     
     private func setupInitialTabs() {
@@ -102,27 +105,21 @@ class CustomTabbarView: NSView {
         tabView.addGestureRecognizer(panGesture)
         
         tabViews.append(tabView)
-        contentView.addSubview(tabView)
-        
-        layoutTabs()
+        tabStackView.addArrangedSubview(tabView)  // 使用StackView API，自动布局
     }
     
     private func closeTab(tabItem: TabItem) {
-        guard tabs.count > 1 else { return } // 至少保留一个标签页
+        guard let index = tabs.firstIndex(where: { $0.id == tabItem.id }) else { return }
         
-        if let index = tabs.firstIndex(where: { $0.id == tabItem.id }) {
-            let wasSelected = tabItem.isSelected
-            
-            tabs.remove(at: index)
-            let tabView = tabViews.remove(at: index)
-            tabView.removeFromSuperview()
-            
-            if wasSelected && !tabs.isEmpty {
-                let newIndex = min(index, tabs.count - 1)
-                selectTab(at: newIndex)
-            }
-            
-            layoutTabs()
+        tabs.remove(at: index)
+        let tabView = tabViews.remove(at: index)
+        tabStackView.removeArrangedSubview(tabView)  // 使用StackView API
+        tabView.removeFromSuperview()
+        
+        // 如果关闭的是选中的tab，选择相邻的tab
+        if tabItem.isSelected && !tabs.isEmpty {
+            let newIndex = min(index, tabs.count - 1)
+            selectTab(at: newIndex)
         }
     }
     
@@ -138,28 +135,7 @@ class CustomTabbarView: NSView {
         tabViews[index].updateAppearance()
     }
     
-    private func layoutTabs() {
-        let tabWidth: CGFloat = 150
-        let tabHeight: CGFloat = 28
-        let spacing: CGFloat = 4
-        
-        for (index, tabView) in tabViews.enumerated() {
-            tabView.translatesAutoresizingMaskIntoConstraints = false
-            tabView.removeFromSuperview()
-            contentView.addSubview(tabView)
-            
-            NSLayoutConstraint.activate([
-                tabView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: CGFloat(index) * (tabWidth + spacing)),
-                tabView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
-                tabView.widthAnchor.constraint(equalToConstant: tabWidth),
-                tabView.heightAnchor.constraint(equalToConstant: tabHeight)
-            ])
-        }
-        
-        // 更新内容视图大小
-        let totalWidth = CGFloat(tabViews.count) * (tabWidth + spacing)
-        contentView.frame = NSRect(x: 0, y: 0, width: max(totalWidth, scrollView.frame.width), height: scrollView.frame.height)
-    }
+    // NSStackView自动处理布局，不再需要layoutTabs方法
     
     // MARK: - 拖动排序功能
     @objc private func handlePanGesture(_ gesture: NSPanGestureRecognizer) {
@@ -173,16 +149,15 @@ class CustomTabbarView: NSView {
             }
             
         case .changed:
-            let translation = gesture.translation(in: contentView)
+            let translation = gesture.translation(in: tabStackView)
             tabView.frame.origin.x += translation.x
-            gesture.setTranslation(.zero, in: contentView)
+            gesture.setTranslation(.zero, in: tabStackView)
             
             // 检查是否需要重新排序
             checkForReordering(draggedTabView: tabView)
             
         case .ended, .cancelled:
-            // 重新布局所有标签页
-            layoutTabs()
+            // NSStackView会自动处理布局
             draggedTabView = nil
             draggedTabIndex = nil
             
@@ -222,13 +197,9 @@ class CustomTabbarView: NSView {
         tabs.swapAt(fromIndex, toIndex)
         tabViews.swapAt(fromIndex, toIndex)
         
-        // 重新布局（除了正在拖动的标签页）
-        for (index, tabView) in tabViews.enumerated() {
-            if tabView != draggedTabView {
-                let tabWidth: CGFloat = 150
-                let spacing: CGFloat = 4
-                tabView.frame.origin.x = CGFloat(index) * (tabWidth + spacing)
-            }
-        }
+        // 使用NSStackView的重新排序功能
+        let tabView = tabViews[toIndex]
+        tabStackView.removeArrangedSubview(tabView)
+        tabStackView.insertArrangedSubview(tabView, at: toIndex)
     }
 }

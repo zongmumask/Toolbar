@@ -11,6 +11,7 @@ extension NSToolbarItem.Identifier {
     static let sidebarItem: NSToolbarItem.Identifier = NSToolbarItem.Identifier("SidebarItem")
     static let sidebarTrackingSeparator: NSToolbarItem.Identifier = NSToolbarItem.Identifier("SidebarTrackingSeparator")
     static let tabbarItem: NSToolbarItem.Identifier = NSToolbarItem.Identifier("TabbarItem")
+    static let plusItem: NSToolbarItem.Identifier = NSToolbarItem.Identifier("PlusItem")
 }
 
 class MainWindowController: NSWindowController {
@@ -26,6 +27,7 @@ class MainWindowController: NSWindowController {
 
     func setupToolbar() {
         let toolbar = NSToolbar(identifier: UUID().uuidString)
+        toolbar.showsBaselineSeparator = false
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
         self.window?.titleVisibility = .hidden
@@ -46,7 +48,8 @@ extension MainWindowController: NSToolbarDelegate {
             .sidebarItem,
             .sidebarTrackingSeparator,
             .flexibleSpace,
-            .tabbarItem
+            .tabbarItem,
+            .plusItem
         ]
     }
     
@@ -58,6 +61,10 @@ extension MainWindowController: NSToolbarDelegate {
         items += [
             .sidebarTrackingSeparator,
             .tabbarItem
+        ]
+        items += [
+            .space,
+            .plusItem
         ]
         return items
     }
@@ -88,22 +95,25 @@ extension MainWindowController: NSToolbarDelegate {
             let toolbarItem = NSToolbarItem(itemIdentifier: .tabbarItem)
             let tabbarView = CustomTabbarView()
             tabbarView.wantsLayer = true
-            tabbarView.layer?.backgroundColor = NSColor.red.cgColor
             toolbarItem.view = tabbarView
             
-            // A
-            toolbarItem.minSize = NSSize(width: 200, height: 36)
-            toolbarItem.maxSize = NSSize(width: .greatestFiniteMagnitude, height: 36.0)
+            NSLayoutConstraint.activate([
+                tabbarView.widthAnchor.constraint(greaterThanOrEqualToConstant: 200),
+                tabbarView.heightAnchor.constraint(equalToConstant: 36)
+            ])
             
-            // B
-            let idealWidth = tabbarView.widthAnchor.constraint(equalToConstant: 650)
-            idealWidth.priority = .defaultLow
-
-            let minWidth = tabbarView.widthAnchor.constraint(greaterThanOrEqualToConstant: 200)
-            minWidth.priority = .defaultHigh
-
-            NSLayoutConstraint.activate([idealWidth, minWidth])
-            
+            return toolbarItem
+        case .plusItem:
+            let toolbarItem = NSToolbarItem(itemIdentifier: NSToolbarItem.Identifier.plusItem)
+            toolbarItem.paletteLabel = " Navigator Sidebar"
+            toolbarItem.toolTip = "Hide or show the Navigator"
+            toolbarItem.isBordered = true
+            toolbarItem.target = self
+            toolbarItem.action = #selector(self.objcToggleFirstPanel)
+            toolbarItem.image = NSImage(
+                systemSymbolName: "sidebar.leading",
+                accessibilityDescription: nil
+            )?.withSymbolConfiguration(.init(scale: .large))
             return toolbarItem
         default:
             return NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -128,7 +138,7 @@ class CustomTabView: NSView {
     var onClose: (() -> Void)?
     var onSelect: (() -> Void)?
     
-    private let titleLabel = NSTextField(labelWithString: "")
+    private let titleLabel = StretchableLabel(labelWithString: "")
     private let closeButton = NSButton()
     
     init(tabItem: TabItem) {
@@ -154,6 +164,11 @@ class CustomTabView: NSView {
         titleLabel.alignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        // 设置内容压缩阻力和内容拥抱优先级，让titleLabel充分利用可用空间
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        
         addSubview(titleLabel)
         
         // 关闭按钮
@@ -227,5 +242,19 @@ class CustomTabView: NSView {
         )
         addTrackingArea(trackingArea)
     }
+    
+    // 重写intrinsicContentSize，让NSStackView的fillEqually分布生效
+    override var intrinsicContentSize: NSSize {
+        // 对于宽度，返回noIntrinsicMetric让NSStackView决定
+        // 对于高度，返回固定值
+        return NSSize(width: NSView.noIntrinsicMetric, height: 32)
+    }
 }
 
+class StretchableLabel: NSTextField {
+    override var intrinsicContentSize: NSSize {
+        // 忽略文本宽度，只保留高度
+        let original = super.intrinsicContentSize
+        return NSSize(width: NSView.noIntrinsicMetric, height: original.height)
+    }
+}

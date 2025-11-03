@@ -10,8 +10,7 @@ import Cocoa
 class SidebarViewController: NSViewController {
 
     override func viewDidLoad() {
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.yellow.cgColor
+        view.wantsLayer = true        
     }
     
 }
