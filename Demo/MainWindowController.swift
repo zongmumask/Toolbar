@@ -153,6 +153,7 @@ class CustomTabView: NSView {
     
     private func setupUI() {
         wantsLayer = true
+        layer?.masksToBounds = false  // 允许阴影显示
         
         // 设置标签页样式
         updateAppearance()
@@ -242,13 +243,6 @@ class CustomTabView: NSView {
         )
         addTrackingArea(trackingArea)
     }
-    
-    // 重写intrinsicContentSize，让NSStackView的fillEqually分布生效
-    override var intrinsicContentSize: NSSize {
-        // 对于宽度，返回noIntrinsicMetric让NSStackView决定
-        // 对于高度，返回固定值
-        return NSSize(width: NSView.noIntrinsicMetric, height: 32)
-    }
 }
 
 class StretchableLabel: NSTextField {
@@ -258,3 +252,4 @@ class StretchableLabel: NSTextField {
         return NSSize(width: NSView.noIntrinsicMetric, height: original.height)
     }
 }
+

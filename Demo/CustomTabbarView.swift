@@ -16,6 +16,10 @@ class CustomTabbarView: NSView {
     private var draggedTabIndex: Int?
     private var draggedTabView: CustomTabView?
     
+    override var mouseDownCanMoveWindow: Bool {
+        return false
+    }
+    
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupUI()
@@ -61,14 +65,6 @@ class CustomTabbarView: NSView {
             plusButton.widthAnchor.constraint(equalToConstant: 24),
             plusButton.heightAnchor.constraint(equalToConstant: 24)
         ])
-    }
-    
-    // NSStackView自动处理布局，移除这些方法
-    // override func viewDidEndLiveResize() 和 resizeSubviews 不再需要
-    
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        // NSStackView会自动处理布局，不需要手动调用layoutTabs
     }
     
     private func setupInitialTabs() {
@@ -134,9 +130,7 @@ class CustomTabbarView: NSView {
         tabs[index].isSelected = true
         tabViews[index].updateAppearance()
     }
-    
-    // NSStackView自动处理布局，不再需要layoutTabs方法
-    
+        
     // MARK: - 拖动排序功能
     @objc private func handlePanGesture(_ gesture: NSPanGestureRecognizer) {
         guard let tabView = gesture.view as? CustomTabView else { return }
@@ -148,16 +142,26 @@ class CustomTabbarView: NSView {
                 draggedTabIndex = index
             }
             
+            // 添加视觉反馈
+            tabView.layer?.shadowOpacity = 0.3
+            tabView.layer?.shadowOffset = NSSize(width: 0, height: 2)
+            tabView.layer?.shadowRadius = 4
+            
         case .changed:
             let translation = gesture.translation(in: tabStackView)
-            tabView.frame.origin.x += translation.x
-            gesture.setTranslation(.zero, in: tabStackView)
+            
+            // 使用transform而不是直接修改frame，避免与NSStackView冲突
+            tabView.layer?.transform = CATransform3DMakeTranslation(translation.x, 0, 0)
             
             // 检查是否需要重新排序
-            checkForReordering(draggedTabView: tabView)
+            checkForReordering(draggedTabView: tabView, translation: translation)
             
         case .ended, .cancelled:
-            // NSStackView会自动处理布局
+            // 移除视觉效果
+            tabView.layer?.shadowOpacity = 0
+            tabView.layer?.transform = CATransform3DIdentity
+            
+            // 清理状态
             draggedTabView = nil
             draggedTabIndex = nil
             
@@ -166,23 +170,26 @@ class CustomTabbarView: NSView {
         }
     }
     
-    private func checkForReordering(draggedTabView: CustomTabView) {
+    private func checkForReordering(draggedTabView: CustomTabView, translation: NSPoint) {
         guard let draggedIndex = draggedTabIndex else { return }
         
-        let draggedCenter = draggedTabView.frame.midX
+        // 计算拖动后的中心位置
+        let draggedCenter = draggedTabView.frame.midX + translation.x
         
         for (index, tabView) in tabViews.enumerated() {
             if index == draggedIndex { continue }
             
             let tabCenter = tabView.frame.midX
+            let tabWidth = tabView.frame.width
             
-            if draggedIndex < index && draggedCenter > tabCenter {
-                // 向右拖动
+            // 使用更精确的重叠检测
+            if draggedIndex < index && draggedCenter > tabCenter - tabWidth/4 {
+                // 向右拖动，当拖动的tab中心超过目标tab的1/4位置时交换
                 swapTabs(from: draggedIndex, to: index)
                 draggedTabIndex = index
                 break
-            } else if draggedIndex > index && draggedCenter < tabCenter {
-                // 向左拖动
+            } else if draggedIndex > index && draggedCenter < tabCenter + tabWidth/4 {
+                // 向左拖动，当拖动的tab中心小于目标tab的3/4位置时交换
                 swapTabs(from: draggedIndex, to: index)
                 draggedTabIndex = index
                 break
