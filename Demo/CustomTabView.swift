@@ -8,121 +8,58 @@
 import Cocoa
 
 class CustomTabView: NSView {
-    var tabItem: TabItem
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let closeButton = NSButton()
     var onClose: (() -> Void)?
     var onSelect: (() -> Void)?
     
-    private let titleLabel = StretchableLabel(labelWithString: "")
-    private let closeButton = NSButton()
-    
+    private let horizontalPadding: CGFloat = 12
+    private let spacing: CGFloat = 4
+    private let buttonSize: CGFloat = 16
+
     init(tabItem: TabItem) {
-        self.tabItem = tabItem
         super.init(frame: .zero)
-        setupUI()
-    }
-    
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-    
-    private func setupUI() {
         wantsLayer = true
-        layer?.masksToBounds = false  // 允许阴影显示
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         
-        // 设置标签页样式
-        updateAppearance()
-        
-        // 标题标签
         titleLabel.stringValue = tabItem.title
-        titleLabel.font = NSFont.systemFont(ofSize: 12)
-        titleLabel.textColor = .labelColor
-        titleLabel.alignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        
-        // 设置内容压缩阻力和内容拥抱优先级，让titleLabel充分利用可用空间
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        
         addSubview(titleLabel)
         
-        // 关闭按钮
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")
-        closeButton.imageScaling = .scaleProportionallyDown
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
         closeButton.isBordered = false
-        closeButton.bezelStyle = .circular
         closeButton.target = self
-        closeButton.action = #selector(closeButtonClicked)
-        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.action = #selector(closeTab)
         addSubview(closeButton)
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
         
-        // 约束
-        NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            closeButton.widthAnchor.constraint(equalToConstant: 16),
-            closeButton.heightAnchor.constraint(equalToConstant: 16)
-        ])
+        let labelWidth = max(bounds.width - horizontalPadding * 2 - buttonSize - spacing, 20)
+        titleLabel.frame = CGRect(
+            x: horizontalPadding,
+            y: (bounds.height - titleLabel.intrinsicContentSize.height) / 2,
+            width: labelWidth,
+            height: titleLabel.intrinsicContentSize.height
+        )
         
-        // 点击手势
-        let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(tabClicked))
-        addGestureRecognizer(clickGesture)
+        closeButton.frame = CGRect(
+            x: titleLabel.frame.maxX + spacing,
+            y: (bounds.height - buttonSize) / 2,
+            width: buttonSize,
+            height: buttonSize
+        )
     }
     
-    func updateAppearance() {
-        if tabItem.isSelected {
-            layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
-            layer?.borderWidth = 1
-        } else {
-            layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
-            layer?.borderColor = NSColor.separatorColor.cgColor
-            layer?.borderWidth = 0.5
-        }
-        layer?.cornerRadius = 6
-    }
-    
-    @objc private func tabClicked() {
-        onSelect?()
-    }
-    
-    @objc private func closeButtonClicked() {
+    @objc private func closeTab() {
         onClose?()
     }
-    
-    override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        closeButton.isHidden = false
-    }
-    
-    override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        if !tabItem.isSelected {
-            closeButton.isHidden = true
-        }
-    }
-    
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
-        let trackingArea = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeInKeyWindow],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(trackingArea)
-    }
-}
 
-class StretchableLabel: NSTextField {
-    override var intrinsicContentSize: NSSize {
-        // 忽略文本宽度，只保留高度
-        let original = super.intrinsicContentSize
-        return NSSize(width: NSView.noIntrinsicMetric, height: original.height)
+    func updateAppearance(selected: Bool) {
+        layer?.backgroundColor = selected ? NSColor.selectedControlColor.cgColor : NSColor.controlBackgroundColor.cgColor
     }
 }
