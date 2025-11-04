@@ -6,6 +6,7 @@
 //
 
 import Cocoa
+import QuartzCore
 
 class CustomTabbarView: NSView {
     private var tabs: [TabItem] = []
@@ -15,6 +16,27 @@ class CustomTabbarView: NSView {
     
     private var draggedTabIndex: Int?
     private var draggedTabView: CustomTabView?
+    private var draggedOriginalIndex: Int?
+    private var neighborShiftOffsets: [Int: CGFloat] = [:]  // 记录相邻项的位移偏移量
+    private var shiftHistory: [Int] = []  // 记录已发生位移的相邻项索引顺序，用于回退
+    private let reorderAnimationDuration: CFTimeInterval = 0.4
+
+    private func animateTransform(_ view: NSView, to target: CATransform3D, duration: CFTimeInterval) {
+        guard let layer = view.layer else { return }
+        let fromTransform = layer.presentation()?.transform ?? layer.transform
+        // 先设置模型层到目标值，随后添加补间动画
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = target
+        CATransaction.commit()
+        let anim = CABasicAnimation(keyPath: "transform")
+        anim.fromValue = NSValue(caTransform3D: fromTransform)
+        anim.toValue = NSValue(caTransform3D: target)
+        anim.duration = duration
+        anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.removeAnimation(forKey: "reorderTransform")
+        layer.add(anim, forKey: "reorderTransform")
+    }
     
     override var mouseDownCanMoveWindow: Bool {
         return false
@@ -34,7 +56,6 @@ class CustomTabbarView: NSView {
     
     private func setupUI() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         
         // 配置StackView
         tabStackView.orientation = .horizontal
@@ -140,12 +161,17 @@ class CustomTabbarView: NSView {
             draggedTabView = tabView
             if let index = tabViews.firstIndex(of: tabView) {
                 draggedTabIndex = index
+                draggedOriginalIndex = index
             }
             
             // 添加视觉反馈
             tabView.layer?.shadowOpacity = 0.3
             tabView.layer?.shadowOffset = NSSize(width: 0, height: 2)
             tabView.layer?.shadowRadius = 4
+            tabView.layer?.zPosition = 1000
+            // 清理相邻位移状态
+            neighborShiftOffsets.removeAll()
+            shiftHistory.removeAll()
             
         case .changed:
             let translation = gesture.translation(in: tabStackView)
@@ -159,11 +185,16 @@ class CustomTabbarView: NSView {
         case .ended, .cancelled:
             // 移除视觉效果
             tabView.layer?.shadowOpacity = 0
-            tabView.layer?.transform = CATransform3DIdentity
+            
+            // 将拖拽项插入到最终索引，并清理相邻项动画
+            finalizeReorderingIfNeeded()
             
             // 清理状态
             draggedTabView = nil
             draggedTabIndex = nil
+            draggedOriginalIndex = nil
+            neighborShiftOffsets.removeAll()
+            shiftHistory.removeAll()
             
         default:
             break
@@ -171,42 +202,96 @@ class CustomTabbarView: NSView {
     }
     
     private func checkForReordering(draggedTabView: CustomTabView, translation: NSPoint) {
-        guard let draggedIndex = draggedTabIndex else { return }
+        guard var currentInsertIndex = draggedTabIndex else { return }
         
-        // 计算拖动后的中心位置
-        let draggedCenter = draggedTabView.frame.midX + translation.x
+        // 以拖拽项左右边缘跨越相邻中心为触发条件
+        let draggedRight = draggedTabView.frame.maxX + translation.x
+        let draggedLeft = draggedTabView.frame.minX + translation.x
         
-        for (index, tabView) in tabViews.enumerated() {
-            if index == draggedIndex { continue }
+        // 向右检查：拖拽项的右侧超过右侧相邻项中心时触发
+        if currentInsertIndex + 1 <= tabViews.count - 1 {
+            let rightIndex = currentInsertIndex + 1
+            let rightView = tabViews[rightIndex]
+            let rightCenter = rightView.frame.midX
+            let rightWidth = rightView.frame.width
             
-            let tabCenter = tabView.frame.midX
-            let tabWidth = tabView.frame.width
+            if neighborShiftOffsets[rightIndex] == nil && draggedRight > rightCenter {
+                animateTransform(rightView, to: CATransform3DMakeTranslation(-rightWidth, 0, 0), duration: reorderAnimationDuration)
+                neighborShiftOffsets[rightIndex] = -rightWidth
+                shiftHistory.append(rightIndex)
+                currentInsertIndex += 1
+                draggedTabIndex = currentInsertIndex
+            }
+        }
+        
+        // 向左检查：拖拽项的左侧超过左侧相邻项中心时触发
+        if currentInsertIndex - 1 >= 0 {
+            let leftIndex = currentInsertIndex - 1
+            let leftView = tabViews[leftIndex]
+            let leftCenter = leftView.frame.midX
+            let leftWidth = leftView.frame.width
             
-            // 使用更精确的重叠检测
-            if draggedIndex < index && draggedCenter > tabCenter - tabWidth/4 {
-                // 向右拖动，当拖动的tab中心超过目标tab的1/4位置时交换
-                swapTabs(from: draggedIndex, to: index)
-                draggedTabIndex = index
-                break
-            } else if draggedIndex > index && draggedCenter < tabCenter + tabWidth/4 {
-                // 向左拖动，当拖动的tab中心小于目标tab的3/4位置时交换
-                swapTabs(from: draggedIndex, to: index)
-                draggedTabIndex = index
-                break
+            if neighborShiftOffsets[leftIndex] == nil && draggedLeft < leftCenter {
+                animateTransform(leftView, to: CATransform3DMakeTranslation(leftWidth, 0, 0), duration: reorderAnimationDuration)
+                neighborShiftOffsets[leftIndex] = leftWidth
+                shiftHistory.append(leftIndex)
+                currentInsertIndex -= 1
+                draggedTabIndex = currentInsertIndex
+            }
+        }
+        
+        // 回退处理：当拖拽边缘回到未超过相邻中心时，撤销最近一次相邻项动画
+        if let lastShifted = shiftHistory.last {
+            let lastView = tabViews[lastShifted]
+            let lastCenter = lastView.frame.midX
+            let offset = neighborShiftOffsets[lastShifted] ?? 0
+            if offset < 0 {
+                // 最近一次是向右经过（右侧相邻左移）：如果拖拽视图的右边缘回到该相邻项中心左侧，则撤销
+                if draggedRight < lastCenter {
+                    animateTransform(lastView, to: CATransform3DIdentity, duration: reorderAnimationDuration)
+                    neighborShiftOffsets.removeValue(forKey: lastShifted)
+                    shiftHistory.removeLast()
+                    draggedTabIndex = max((draggedTabIndex ?? 0) - 1, 0)
+                }
+            } else if offset > 0 {
+                // 最近一次是向左经过（左侧相邻右移）：如果拖拽视图的左边缘回到该相邻项中心右侧，则撤销
+                if draggedLeft > lastCenter {
+                    animateTransform(lastView, to: CATransform3DIdentity, duration: reorderAnimationDuration)
+                    neighborShiftOffsets.removeValue(forKey: lastShifted)
+                    shiftHistory.removeLast()
+                    draggedTabIndex = min((draggedTabIndex ?? 0) + 1, tabViews.count - 1)
+                }
             }
         }
     }
-    
-    private func swapTabs(from fromIndex: Int, to toIndex: Int) {
-        guard fromIndex != toIndex && fromIndex >= 0 && toIndex >= 0 && fromIndex < tabs.count && toIndex < tabs.count else { return }
+
+    private func finalizeReorderingIfNeeded() {
+        guard let originalIndex = draggedOriginalIndex, let finalIndex = draggedTabIndex, let draggedView = draggedTabView else { return }
         
-        // 交换数据
-        tabs.swapAt(fromIndex, toIndex)
-        tabViews.swapAt(fromIndex, toIndex)
+        // 相邻项不做动画复位，直接清空位移（拖拽过程中已重排）
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (idx, _) in neighborShiftOffsets {
+            if idx >= 0 && idx < tabViews.count {
+                tabViews[idx].layer?.transform = CATransform3DIdentity
+            }
+        }
+        CATransaction.commit()
         
-        // 使用NSStackView的重新排序功能
-        let tabView = tabViews[toIndex]
-        tabStackView.removeArrangedSubview(tabView)
-        tabStackView.insertArrangedSubview(tabView, at: toIndex)
+        // 更新数据模型顺序：把拖拽项从原位置移除并插入到finalIndex
+        let draggedItem = tabs[originalIndex]
+        tabs.remove(at: originalIndex)
+        tabViews.remove(at: originalIndex)
+        
+        // 直接按最终索引插入（finalIndex 表示拖拽后的目标位置）
+        tabs.insert(draggedItem, at: finalIndex)
+        tabViews.insert(draggedView, at: finalIndex)
+        
+        // 使用NSStackView的重新排序功能进行最终回插入
+        tabStackView.removeArrangedSubview(draggedView)
+        tabStackView.insertArrangedSubview(draggedView, at: finalIndex)
+
+        // 仅对拖拽项做回位动画（从当前平移到最终位置）
+        animateTransform(draggedView, to: CATransform3DIdentity, duration: reorderAnimationDuration)
     }
 }
